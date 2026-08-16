@@ -71,7 +71,6 @@ app.post("/api/identify", async (req, res) => {
         generationConfig: {
           response_mime_type: "application/json",
           maxOutputTokens: 700,
-          thinkingConfig: { thinkingBudget: 0 },
         },
       }),
     });
@@ -163,7 +162,7 @@ app.post("/api/chat", async (req, res) => {
       body: JSON.stringify({
         system_instruction: { parts: [{ text: CHAT_SYSTEM }] },
         contents,
-        generationConfig: { maxOutputTokens: 300, thinkingConfig: { thinkingBudget: 0 } },
+        generationConfig: { maxOutputTokens: 300 },
       }),
     });
 
