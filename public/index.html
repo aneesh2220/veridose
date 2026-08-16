@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Veridose</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+  :root {
+    --bg: #0B0F12; --panel: #12171B; --panel-alt: #171D22; --line: #262E33;
+    --text: #F3F5F4; --text-dim: #C7CDD0; --muted: #8B9599;
+    --cyan: #4FD1E8; --mint: #A8E6B8; --mint-dark: #0F2013;
+    --amber: #E8C26B; --amber-bg: #2B2415; --red: #E39187; --red-bg: #2B1917;
+    --font-display: 'Playfair Display', serif;
+    --font-body: 'Inter', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); }
+  input, select, button, textarea { font-family: var(--font-body); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--cyan) !important; }
+  button { cursor: pointer; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 13px 20px; border-radius: 10px; font-size: 14px; font-weight: 600; border: none; }
+  .btn-primary { background: var(--mint); color: var(--mint-dark); }
+  .btn-secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+    padding: 4px 11px; border-radius: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .input { width: 100%; box-sizing: border-box; padding: 11px 13px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--panel-alt); color: var(--text); font-size: 14px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+function ICON(name, size, color) {
+  size = size || 16; color = color || "currentColor";
+  const s = `width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"`;
+  const paths = {
+    logo: `<circle cx="12" cy="12" r="8"/><path d="M5 12h14"/>`,
+    camera: `<path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="14" r="3"/>`,
+    pencil: `<path d="M4 20h4L18 10l-4-4L4 16v4Z"/><path d="M13 7l4 4"/>`,
+    alert: `<path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4"/><circle cx="12" cy="17" r="0.5" fill="${color}"/>`,
+    shield: `<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3Z"/>`,
+    trash: `<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>`,
+    loader: `<path d="M12 3a9 9 0 1 0 9 9"/>`,
+    chat: `<path d="M4 4h16v12H9l-4 4V4Z"/>`,
+    send: `<path d="M5 12h14M13 6l6 6-6 6"/>`,
+    x: `<path d="M6 6l12 12M18 6L6 18"/>`,
+    arrowLeft: `<path d="M19 12H5M11 6l-6 6 6 6"/>`,
+    languages: `<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z"/>`,
+  };
+  return `<svg ${s}>${paths[name] || ""}</svg>`;
+}
+
+function escapeHTML(str) {
+  const div = document.createElement("div");
+  div.textContent = str == null ? "" : str;
+  return div.innerHTML;
+}
+
+function fileToResizedJpeg(file, maxDim, quality) {
+  maxDim = maxDim || 720; quality = quality || 0.6;
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Could not read that image."));
+      img.onload = () => {
+        let width = img.width, height = img.height;
+        if (width > height && width > maxDim) { height = Math.round(height * maxDim / width); width = maxDim; }
+        else if (height > maxDim) { width = Math.round(width * maxDim / height); height = maxDim; }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality).split(",")[1]);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function identifyPill(payload) {
+  const response = await fetch("/api/identify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Request failed (${response.status}).`);
+  }
+  return response.json();
+}
+
+async function sendChat(message, history) {
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, history }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Chat request failed (${response.status}).`);
+  }
+  return response.json();
+}
+
+// ---------- state ----------
+const state = {
+  view: "hero", // hero | photo | describe | results
+  currentMeds: "", language: "English", history: [],
+  analyzing: false, pendingPreview: null, analyzeError: "", loaded: false,
+  descriptionText: "",
+  chatHistory: [], chatSending: false, chatError: "",
+};
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem("veridose-history");
+    state.history = raw ? JSON.parse(raw) : [];
+  } catch { state.history = []; }
+  try {
+    const meds = localStorage.getItem("veridose-current-meds");
+    if (meds) state.currentMeds = meds;
+  } catch {}
+  if (state.history.length) state.view = "results";
+  state.loaded = true;
+}
+
+function saveHistory() { localStorage.setItem("veridose-history", JSON.stringify(state.history)); }
+
+async function runIdentify(payload, previewImage) {
+  state.analyzeError = "";
+  state.pendingPreview = previewImage || null;
+  state.analyzing = true;
+  render();
+  try {
+    const result = await identifyPill(payload);
+    const entry = { id: `entry_${Date.now()}`, date: new Date().toISOString(), image: previewImage || null, description: payload.description || null, result };
+    state.history.unshift(entry);
+    saveHistory();
+    state.view = "results";
+  } catch (err) {
+    state.analyzeError = err.message || "Something went wrong. Try again.";
+  } finally {
+    state.analyzing = false;
+    state.pendingPreview = null;
+    render();
+  }
+}
+
+async function handleFile(file) {
+  if (!file) return;
+  try {
+    const base64 = await fileToResizedJpeg(file);
+    await runIdentify({ base64, currentMeds: state.currentMeds, language: state.language }, base64);
+  } catch (err) {
+    state.analyzeError = err.message || "Could not read that photo.";
+    render();
+  }
+}
+
+function submitDescription() {
+  const text = state.descriptionText.trim();
+  if (!text) { state.analyzeError = "Describe the shape, colour, or any imprint first."; render(); return; }
+  runIdentify({ description: text, currentMeds: state.currentMeds, language: state.language });
+}
+
+function deleteEntry(id) {
+  state.history = state.history.filter(e => e.id !== id);
+  saveHistory();
+  if (state.history.length === 0) state.view = "hero";
+  render();
+}
+
+async function sendChatMessage(text) {
+  const trimmed = (text || "").trim();
+  if (!trimmed || state.chatSending) return;
+  state.chatError = "";
+  const historyForRequest = state.chatHistory.map(m => ({ role: m.role, text: m.text }));
+  state.chatHistory.push({ role: "user", text: trimmed });
+  state.chatSending = true;
+  render();
+  try {
+    const data = await sendChat(trimmed, historyForRequest);
+    state.chatHistory.push({ role: "model", text: data.reply || "..." });
+  } catch (err) {
+    state.chatError = err.message || "Something went wrong. Try again.";
+  } finally {
+    state.chatSending = false;
+    render();
+    const list = document.getElementById("chat-section-messages");
+    if (list) list.scrollTop = list.scrollHeight;
+  }
+}
+
+// ---------- render pieces ----------
+function likelihoodBadge(level) {
+  const map = {
+    high: { color: "var(--mint)", bg: "var(--mint-dark)", label: "Possible match" },
+    medium: { color: "var(--amber)", bg: "var(--amber-bg)", label: "Less certain" },
+    low: { color: "var(--muted)", bg: "var(--panel-alt)", label: "Unlikely" },
+  };
+  const m = map[level] || map.low;
+  return `<span class="badge" style="color:${m.color};background:${m.bg};">${m.label}</span>`;
+}
+
+function headerHTML() {
+  return `
+    <nav style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line);">
+      <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" id="logo-home">
+        <span style="color:var(--cyan);display:flex;">${ICON("logo", 22, "#4FD1E8")}</span>
+        <div>
+          <div style="font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing:1.5px;">VERIDOSE</div>
+          <div style="font-size:9.5px;color:var(--cyan);letter-spacing:2px;margin-top:1px;">MEDICATION IDENTIFICATION</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="nav-chat" class="btn btn-secondary" style="padding:8px 14px;font-size:13px;">${ICON("chat", 14)} Chat</button>
+        <button id="lang-toggle" class="btn btn-secondary" style="padding:8px 14px;font-size:13px;">${ICON("languages", 14)} ${state.language}</button>
+      </div>
+    </nav>`;
+}
+
+function heroHTML() {
+  return `
+    <div style="max-width:960px;margin:0 auto;padding:60px 24px 70px;display:grid;grid-template-columns:1.15fr 1fr;gap:56px;align-items:start;">
+      <div>
+        <h1 style="font-family:var(--font-display);font-weight:700;font-size:44px;line-height:1.15;margin:0 0 22px;">Know exactly<br/>what you are<br/>holding.</h1>
+        <p style="color:var(--text-dim);font-size:15px;line-height:1.7;max-width:440px;margin:0 0 26px;">
+          Photograph a tablet or capsule — or simply describe it — and Veridose returns the most likely medicine, general purpose, and the warnings that matter, with every close alternative it considered.
+        </p>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <button id="go-photo" class="btn btn-primary">${ICON("camera", 16, "var(--mint-dark)")} Begin identification</button>
+          <button id="go-describe" class="btn btn-secondary">${ICON("pencil", 16)} Describe it instead</button>
+        </div>
+      </div>
+      <div>
+        ${stepHTML("01", "Photograph the tablet", "Place it on a plain, dark surface in even light. Veridose reads the imprint, the shape, the colour and the score line.")}
+        ${stepHTML("02", "Confirm the match", "You get one most-likely medicine and every close alternative, so you can verify the imprint yourself before taking anything.")}
+        ${stepHTML("03", "Keep a cabinet", "Save what you check. Veridose flags general interaction concerns across everything in your history.")}
+      </div>
+    </div>
+    <div style="max-width:960px;margin:0 auto;padding:0 24px 50px;">
+      ${disclaimerHTML()}
+    </div>`;
+}
+
+function stepHTML(num, title, body) {
+  return `
+    <div style="padding:18px 0;border-top:1px solid var(--line);">
+      <div style="display:flex;gap:16px;">
+        <span style="color:var(--cyan);font-family:var(--font-mono);font-size:12px;padding-top:3px;flex-shrink:0;">${num}</span>
+        <div>
+          <h3 style="font-family:var(--font-display);font-weight:700;font-size:17px;margin:0 0 6px;">${title}</h3>
+          <p style="color:var(--muted);font-size:13.5px;line-height:1.6;margin:0;">${body}</p>
+        </div>
+      </div>
+    </div>`;
+}
+
+function disclaimerHTML() {
+  return `
+    <div style="background:var(--amber-bg);border-radius:10px;padding:12px 16px;display:flex;gap:10px;align-items:flex-start;">
+      ${ICON("shield", 16, "var(--amber)")}
+      <p style="margin:0;font-size:12.5px;color:#D9C594;line-height:1.6;">
+        Veridose never gives a confirmed diagnosis or dosage advice — only ranked possible matches to help you ask the right question.
+        <strong style="color:var(--amber);">Always confirm with a pharmacist or doctor before taking any medication.</strong>
+      </p>
+    </div>`;
+}
+
+function backRow(label) {
+  return `
+    <div id="back-to-hero" style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;cursor:pointer;margin-bottom:20px;">
+      ${ICON("arrowLeft", 15, "var(--muted)")} ${label}
+    </div>`;
+}
+
+function photoViewHTML() {
+  return `
+    <div style="max-width:560px;margin:0 auto;padding:40px 24px 60px;">
+      ${backRow("Back")}
+      <h2 style="font-family:var(--font-display);font-size:26px;margin:0 0 8px;">Photograph the tablet</h2>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 22px;">Plain surface, even light, close enough to see the imprint clearly.</p>
+
+      <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Current medications (optional)</label>
+      <input id="meds-input" class="input" placeholder="e.g. metformin, aspirin" value="${escapeHTML(state.currentMeds)}" style="margin-bottom:20px;" />
+
+      <div class="card" style="padding:26px;text-align:center;">
+        <input id="file-input" type="file" accept="image/*" style="display:none;" />
+        ${state.analyzing ? `
+          <div style="display:flex;flex-direction:column;align-items:center;gap:10px;">
+            ${state.pendingPreview ? `<img src="data:image/jpeg;base64,${state.pendingPreview}" alt="Uploading" style="width:64px;height:64px;object-fit:cover;border-radius:8px;opacity:0.6;" />` : ""}
+            <span class="spin" style="display:inline-flex;">${ICON("loader", 20, "var(--cyan)")}</span>
+            <p style="font-size:13px;color:var(--muted);margin:0;">Reading the tablet…</p>
+          </div>` : `
+          <button id="upload-btn" class="btn btn-primary">${ICON("camera", 16, "var(--mint-dark)")} Choose a photo</button>`}
+        ${state.analyzeError ? `<p style="color:var(--red);font-size:13px;margin-top:14px;">${escapeHTML(state.analyzeError)}</p>` : ""}
+      </div>
+    </div>`;
+}
+
+function describeViewHTML() {
+  return `
+    <div style="max-width:560px;margin:0 auto;padding:40px 24px 60px;">
+      ${backRow("Back")}
+      <h2 style="font-family:var(--font-display);font-size:26px;margin:0 0 8px;">Describe it instead</h2>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 22px;">Shape, colour, size, any letters or numbers stamped on it, and packaging text if you have it.</p>
+
+      <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Current medications (optional)</label>
+      <input id="meds-input" class="input" placeholder="e.g. metformin, aspirin" value="${escapeHTML(state.currentMeds)}" style="margin-bottom:20px;" />
+
+      <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Description</label>
+      <textarea id="desc-input" class="input" rows="4" placeholder="e.g. small round white tablet, imprint L484, no strip">${escapeHTML(state.descriptionText)}</textarea>
+
+      <button id="submit-desc" class="btn btn-primary" style="margin-top:16px;width:100%;" ${state.analyzing ? "disabled" : ""}>
+        ${state.analyzing ? `<span class="spin" style="display:inline-flex;">${ICON("loader", 16, "var(--mint-dark)")}</span> Checking…` : "Check description"}
+      </button>
+      ${state.analyzeError ? `<p style="color:var(--red);font-size:13px;margin-top:12px;">${escapeHTML(state.analyzeError)}</p>` : ""}
+    </div>`;
+}
+
+function resultCardHTML(entry) {
+  const r = entry.result;
+  const matches = (r.possible_matches || []).map(m => `
+    <div style="padding:12px 0;border-bottom:1px solid var(--line);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span style="font-weight:700;font-family:var(--font-display);font-size:16px;">${escapeHTML(m.name)}</span>
+        ${likelihoodBadge(m.likelihood)}
+      </div>
+      ${m.common_use ? `<p style="margin:5px 0 0;font-size:12.5px;color:var(--cyan);">${escapeHTML(m.common_use)}</p>` : ""}
+      <p style="margin:4px 0 0;font-size:13px;color:var(--muted);">${escapeHTML(m.reason)}</p>
+    </div>`).join("") || `<p style="font-size:13.5px;color:var(--muted);padding:8px 0;">No confident matches from this.</p>`;
+
+  const flags = (r.interaction_flags || []).map(f => `
+    <div style="display:flex;gap:8px;padding:8px 0;">
+      ${ICON("alert", 15, "var(--red)")}
+      <p style="margin:0;font-size:13px;color:var(--text-dim);"><strong style="color:var(--text);">${escapeHTML(f.with)}:</strong> ${escapeHTML(f.concern)}</p>
+    </div>`).join("");
+
+  return `
+    <div class="card" style="padding:18px;margin-bottom:14px;">
+      <div style="display:flex;gap:12px;">
+        ${entry.image ? `<img src="data:image/jpeg;base64,${entry.image}" alt="Pill photo" style="width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--line);flex-shrink:0;" />` : `<div style="width:64px;height:64px;border-radius:9px;border:1px solid var(--line);flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--panel-alt);">${ICON("pencil", 20, "var(--muted)")}</div>`}
+        <div style="flex:1;min-width:0;">
+          <p style="margin:0 0 6px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);">${new Date(entry.date).toLocaleString()}</p>
+          ${matches}
+        </div>
+        <span class="del-entry" data-id="${entry.id}" style="cursor:pointer;display:flex;color:var(--muted);flex-shrink:0;">${ICON("trash", 15, "var(--muted)")}</span>
+      </div>
+      ${r.visual_notes ? `<p style="font-size:12.5px;color:var(--muted);margin:10px 0 0;">${escapeHTML(r.visual_notes)}</p>` : ""}
+      ${flags ? `<div style="margin-top:8px;border-top:1px solid var(--line);">${flags}</div>` : ""}
+      <div style="background:var(--amber-bg);border-radius:9px;padding:10px 12px;margin-top:10px;display:flex;gap:8px;">
+        ${ICON("shield", 15, "var(--amber)")}
+        <p style="margin:0;font-size:12.5px;color:#D9C594;line-height:1.5;">${escapeHTML(r.advice)}</p>
+      </div>
+    </div>`;
+}
+
+function chatSectionHTML() {
+  const messages = state.chatHistory.map(m => `
+    <div style="display:flex;justify-content:${m.role === 'user' ? 'flex-end' : 'flex-start'};align-items:flex-end;gap:8px;margin-bottom:10px;">
+      ${m.role === 'model' ? `<div style="width:28px;height:28px;border-radius:50%;background:var(--panel-alt);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${ICON("logo", 15, "#4FD1E8")}</div>` : ""}
+      <div style="max-width:75%;padding:11px 14px;border-radius:14px;font-size:14px;line-height:1.55;
+        background:${m.role === 'user' ? 'var(--cyan)' : 'var(--panel)'};
+        color:${m.role === 'user' ? '#0B0F12' : 'var(--text)'};
+        border:${m.role === 'user' ? 'none' : '1px solid var(--line)'};
+        white-space:pre-wrap;">${escapeHTML(m.text)}</div>
+    </div>`).join("");
+
+  return `
+    <div style="max-width:640px;margin:0 auto;padding:36px 24px 60px;">
+      ${backRow("Back")}
+      <h2 style="font-family:var(--font-display);font-size:26px;margin:0 0 6px;">Safety assistant</h2>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 20px;">General medication questions and symptom guidance \u2014 storage, disposal, fever, mild symptoms, and when to see a doctor. No dosage advice or diagnosis, ever.</p>
+
+      <div id="chat-section-messages" class="card" style="min-height:340px;max-height:460px;overflow-y:auto;padding:16px;margin-bottom:14px;">
+        ${messages || `<p style="font-size:13.5px;color:var(--muted);text-align:center;margin-top:40px;">Ask about medications, or describe a symptom like a fever \u2014 I'll give general guidance and tell you when it's time to see a doctor.</p>`}
+        ${state.chatSending ? `<div style="display:flex;justify-content:flex-start;"><div style="padding:11px 14px;border-radius:14px;background:var(--panel);border:1px solid var(--line);"><span class="spin" style="display:inline-flex;">${ICON("loader", 15, "var(--muted)")}</span></div></div>` : ""}
+      </div>
+      ${state.chatError ? `<p style="color:var(--red);font-size:13px;margin:0 0 10px;">${escapeHTML(state.chatError)}</p>` : ""}
+      <div style="display:flex;gap:10px;">
+        <input id="chat-section-input" class="input" placeholder="Ask a general question..." style="flex:1;" />
+        <button id="chat-section-send" class="btn btn-primary" style="padding:11px 16px;">${ICON("send", 16, "var(--mint-dark)")} Send</button>
+      </div>
+    </div>`;
+}
+
+function resultsViewHTML() {
+  return `
+    <div style="max-width:600px;margin:0 auto;padding:36px 24px 60px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+        <h2 style="font-family:var(--font-display);font-size:24px;margin:0;">Your checks</h2>
+        <div style="display:flex;gap:8px;">
+          <button id="new-photo" class="btn btn-secondary" style="padding:9px 14px;font-size:13px;">${ICON("camera", 14)} Photo</button>
+          <button id="new-describe" class="btn btn-secondary" style="padding:9px 14px;font-size:13px;">${ICON("pencil", 14)} Describe</button>
+        </div>
+      </div>
+      <div style="margin-bottom:18px;">${disclaimerHTML()}</div>
+      ${state.history.map(resultCardHTML).join("")}
+    </div>`;
+}
+
+function render() {
+  const app = document.getElementById("app");
+  if (!state.loaded) { app.innerHTML = ""; return; }
+
+  let body;
+  if (state.view === "photo") body = photoViewHTML();
+  else if (state.view === "describe") body = describeViewHTML();
+  else if (state.view === "results") body = resultsViewHTML();
+  else if (state.view === "chat") body = chatSectionHTML();
+  else body = heroHTML();
+
+  app.innerHTML = headerHTML() + body;
+  attachHandlers();
+  if (state.view === "chat") {
+    const list = document.getElementById("chat-section-messages");
+    if (list) list.scrollTop = list.scrollHeight;
+  }
+}
+
+function attachHandlers() {
+  const q = (id) => document.getElementById(id);
+
+  const langBtn = q("lang-toggle");
+  if (langBtn) langBtn.onclick = () => { state.language = state.language === "English" ? "Hindi" : "English"; render(); };
+
+  const logoHome = q("logo-home");
+  if (logoHome) logoHome.onclick = () => { state.view = state.history.length ? "results" : "hero"; render(); };
+
+  const goPhoto = q("go-photo"), newPhoto = q("new-photo");
+  [goPhoto, newPhoto].forEach(el => { if (el) el.onclick = () => { state.analyzeError = ""; state.view = "photo"; render(); }; });
+
+  const goDescribe = q("go-describe"), newDescribe = q("new-describe");
+  [goDescribe, newDescribe].forEach(el => { if (el) el.onclick = () => { state.analyzeError = ""; state.view = "describe"; render(); }; });
+
+  const back = q("back-to-hero");
+  if (back) back.onclick = () => { state.view = state.history.length ? "results" : "hero"; render(); };
+
+  const medsInput = q("meds-input");
+  if (medsInput) medsInput.onchange = () => { state.currentMeds = medsInput.value; localStorage.setItem("veridose-current-meds", state.currentMeds); };
+
+  const uploadBtn = q("upload-btn");
+  const fileInput = q("file-input");
+  if (uploadBtn && fileInput) {
+    uploadBtn.onclick = () => fileInput.click();
+    fileInput.onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; handleFile(f); };
+  }
+
+  const descInput = q("desc-input");
+  if (descInput) descInput.oninput = () => { state.descriptionText = descInput.value; };
+  const submitDesc = q("submit-desc");
+  if (submitDesc) submitDesc.onclick = () => submitDescription();
+
+  document.querySelectorAll(".del-entry").forEach(el => { el.onclick = () => deleteEntry(el.dataset.id); });
+
+  const navChat = q("nav-chat");
+  if (navChat) navChat.onclick = () => { state.view = "chat"; render(); };
+
+  const chatSectionSend = q("chat-section-send");
+  const chatSectionInput = q("chat-section-input");
+  if (chatSectionSend && chatSectionInput) {
+    chatSectionSend.onclick = () => { sendChatMessage(chatSectionInput.value); chatSectionInput.value = ""; };
+    chatSectionInput.onkeydown = (e) => { if (e.key === "Enter") { sendChatMessage(chatSectionInput.value); chatSectionInput.value = ""; } };
+    chatSectionInput.focus();
+  }
+}
+
+loadHistory();
+render();
+</script>
+</body>
+</html>
