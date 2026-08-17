@@ -11,6 +11,7 @@
     --text: #F3F5F4; --text-dim: #C7CDD0; --muted: #8B9599;
     --cyan: #4FD1E8; --mint: #A8E6B8; --mint-dark: #0F2013;
     --amber: #E8C26B; --amber-bg: #2B2415; --red: #E39187; --red-bg: #2B1917;
+    --sidebar-w: 220px;
     --font-display: 'Playfair Display', serif;
     --font-body: 'Inter', sans-serif;
     --font-mono: 'IBM Plex Mono', monospace;
@@ -32,12 +33,53 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { animation: spin 1s linear infinite; }
   svg { display: block; }
+
+  .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar-w); background: var(--panel);
+    border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 20px 14px; z-index: 40; }
+  .main { margin-left: var(--sidebar-w); min-height: 100vh; }
+  .nav-item { display: flex; align-items: center; gap: 11px; padding: 11px 12px; border-radius: 9px;
+    color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: 2px; }
+  .nav-item:hover { background: var(--panel-alt); color: var(--text); }
+  .nav-item.active { background: var(--panel-alt); color: var(--cyan); }
+  @media (max-width: 760px) {
+    .sidebar { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; height: 64px;
+      flex-direction: row; align-items: center; justify-content: space-around; padding: 0 6px; border-right: none; border-top: 1px solid var(--line); }
+    .sidebar .brand-block, .sidebar .signout-block { display: none; }
+    .nav-item { flex-direction: column; gap: 3px; font-size: 10px; padding: 6px 8px; text-align: center; }
+    .main { margin-left: 0; padding-bottom: 70px; }
+  }
 </style>
 </head>
 <body>
 <div id="app"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
 <script>
+// ================== FIREBASE SETUP ==================
+// Paste your own Firebase project config below (Firebase Console > Project Settings > Your apps).
+// These values are meant to be public in client code — security is enforced by Firestore rules, not by hiding this.
+const firebaseConfig = {
+  apiKey: "AIzaSyCGIFOiKZOmBMbXu6niy64_Mui9fbi419I",
+  authDomain: "veridose-a8302.firebaseapp.com",
+  projectId: "veridose-a8302",
+  storageBucket: "veridose-a8302.firebasestorage.app",
+  messagingSenderId: "567159165376",
+  appId: "1:567159165376:web:427f1651f8c34505df7825"
+};
+
+let auth = null, db = null, firebaseReady = false;
+try {
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+  db = firebase.firestore();
+  firebaseReady = true;
+} catch (e) {
+  console.error("Firebase not configured yet:", e);
+}
+
 function ICON(name, size, color) {
   size = size || 16; color = color || "currentColor";
   const s = `width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"`;
@@ -54,6 +96,13 @@ function ICON(name, size, color) {
     x: `<path d="M6 6l12 12M18 6L6 18"/>`,
     arrowLeft: `<path d="M19 12H5M11 6l-6 6 6 6"/>`,
     languages: `<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z"/>`,
+    home: `<path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1Z"/>`,
+    calendar: `<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>`,
+    user: `<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>`,
+    sun: `<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4 12H2M22 12h-2M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>`,
+    moon: `<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/>`,
+    cloud: `<path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A4 4 0 0 1 17 18H7Z"/>`,
+    logout: `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>`,
   };
   return `<svg ${s}>${paths[name] || ""}</svg>`;
 }
@@ -114,15 +163,24 @@ async function sendChat(message, history) {
 }
 
 // ---------- state ----------
+const TIME_SLOTS = ["morning", "afternoon", "evening", "night"];
+const TIME_LABELS = { morning: "Morning", afternoon: "Afternoon", evening: "Evening", night: "Night" };
+
 const state = {
-  view: "hero", // hero | photo | describe | results
+  view: "hero", // hero | photo | describe | results | chat | schedule | account
   currentMeds: "", language: "English", history: [],
   analyzing: false, pendingPreview: null, analyzeError: "", loaded: false,
   descriptionText: "",
   chatHistory: [], chatSending: false, chatError: "",
+
+  user: null, authMode: "login", authError: "", authBusy: false,
+  authEmail: "", authPassword: "", authName: "",
+
+  schedule: [], scheduleLoading: false, scheduleError: "",
+  showAddMedicine: false, newMed: { name: "", times: [], frequency: "daily", dayOfMonth: "1", notes: "" },
 };
 
-function loadHistory() {
+function loadLocal() {
   try {
     const raw = localStorage.getItem("veridose-history");
     state.history = raw ? JSON.parse(raw) : [];
@@ -134,9 +192,97 @@ function loadHistory() {
   if (state.history.length) state.view = "results";
   state.loaded = true;
 }
-
 function saveHistory() { localStorage.setItem("veridose-history", JSON.stringify(state.history)); }
 
+// ---------- auth ----------
+function initAuthListener() {
+  if (!firebaseReady) return;
+  auth.onAuthStateChanged((u) => {
+    state.user = u;
+    if (u) {
+      loadSchedule();
+    } else {
+      state.schedule = [];
+    }
+    render();
+  });
+}
+
+async function handleSignUp() {
+  state.authError = ""; state.authBusy = true; render();
+  try {
+    const cred = await auth.createUserWithEmailAndPassword(state.authEmail, state.authPassword);
+    if (state.authName) await cred.user.updateProfile({ displayName: state.authName });
+    state.view = "schedule";
+  } catch (e) {
+    state.authError = e.message || "Could not create account.";
+  } finally {
+    state.authBusy = false; render();
+  }
+}
+async function handleLogin() {
+  state.authError = ""; state.authBusy = true; render();
+  try {
+    await auth.signInWithEmailAndPassword(state.authEmail, state.authPassword);
+    state.view = "schedule";
+  } catch (e) {
+    state.authError = e.message || "Could not sign in.";
+  } finally {
+    state.authBusy = false; render();
+  }
+}
+async function handleLogout() {
+  await auth.signOut();
+  state.view = "hero";
+  render();
+}
+
+// ---------- schedule (Firestore) ----------
+async function loadSchedule() {
+  if (!state.user) return;
+  state.scheduleLoading = true; render();
+  try {
+    const doc = await db.collection("schedules").doc(state.user.uid).get();
+    state.schedule = doc.exists && Array.isArray(doc.data().items) ? doc.data().items : [];
+  } catch (e) {
+    state.scheduleError = e.message || "Could not load your schedule.";
+  } finally {
+    state.scheduleLoading = false; render();
+  }
+}
+async function persistSchedule() {
+  if (!state.user) return;
+  try {
+    await db.collection("schedules").doc(state.user.uid).set({ items: state.schedule, updatedAt: Date.now() });
+  } catch (e) {
+    state.scheduleError = e.message || "Could not save. Try again.";
+    render();
+  }
+}
+function addMedicine() {
+  const m = state.newMed;
+  if (!m.name.trim()) { state.scheduleError = "Give the medicine a name."; render(); return; }
+  if (m.frequency === "daily" && m.times.length === 0) { state.scheduleError = "Pick at least one time of day."; render(); return; }
+  state.scheduleError = "";
+  const entry = {
+    id: `med_${Date.now()}`, name: m.name.trim(), frequency: m.frequency,
+    times: m.frequency === "daily" ? m.times : [],
+    dayOfMonth: m.frequency === "monthly" ? parseInt(m.dayOfMonth, 10) || 1 : null,
+    notes: m.notes.trim(),
+  };
+  state.schedule.push(entry);
+  state.newMed = { name: "", times: [], frequency: "daily", dayOfMonth: "1", notes: "" };
+  state.showAddMedicine = false;
+  persistSchedule();
+  render();
+}
+function deleteMedicine(id) {
+  state.schedule = state.schedule.filter(m => m.id !== id);
+  persistSchedule();
+  render();
+}
+
+// ---------- identify / chat logic (unchanged features) ----------
 async function runIdentify(payload, previewImage) {
   state.analyzeError = "";
   state.pendingPreview = previewImage || null;
@@ -156,7 +302,6 @@ async function runIdentify(payload, previewImage) {
     render();
   }
 }
-
 async function handleFile(file) {
   if (!file) return;
   try {
@@ -167,20 +312,17 @@ async function handleFile(file) {
     render();
   }
 }
-
 function submitDescription() {
   const text = state.descriptionText.trim();
   if (!text) { state.analyzeError = "Describe the shape, colour, or any imprint first."; render(); return; }
   runIdentify({ description: text, currentMeds: state.currentMeds, language: state.language });
 }
-
 function deleteEntry(id) {
   state.history = state.history.filter(e => e.id !== id);
   saveHistory();
   if (state.history.length === 0) state.view = "hero";
   render();
 }
-
 async function sendChatMessage(text) {
   const trimmed = (text || "").trim();
   if (!trimmed || state.chatSending) return;
@@ -213,21 +355,25 @@ function likelihoodBadge(level) {
   return `<span class="badge" style="color:${m.color};background:${m.bg};">${m.label}</span>`;
 }
 
-function headerHTML() {
+function sidebarHTML() {
+  const items = [
+    { id: "hero", icon: "home", label: "Home" },
+    { id: "photo", icon: "camera", label: "Identify" },
+    { id: "chat", icon: "chat", label: "Chat" },
+    { id: "schedule", icon: "calendar", label: "Schedule" },
+    { id: "account", icon: "user", label: state.user ? "Account" : "Sign in" },
+  ];
   return `
-    <nav style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line);">
-      <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" id="logo-home">
-        <span style="color:var(--cyan);display:flex;">${ICON("logo", 22, "#4FD1E8")}</span>
-        <div>
-          <div style="font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing:1.5px;">VERIDOSE</div>
-          <div style="font-size:9.5px;color:var(--cyan);letter-spacing:2px;margin-top:1px;">MEDICATION IDENTIFICATION</div>
-        </div>
+    <div class="sidebar">
+      <div class="brand-block" style="display:flex;align-items:center;gap:9px;margin-bottom:26px;padding:0 4px;">
+        <span style="color:var(--cyan);display:flex;">${ICON("logo", 20, "#4FD1E8")}</span>
+        <span style="font-family:var(--font-display);font-weight:700;font-size:15px;letter-spacing:1px;">VERIDOSE</span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;">
-        <button id="nav-chat" class="btn btn-secondary" style="padding:8px 14px;font-size:13px;">${ICON("chat", 14)} Chat</button>
-        <button id="lang-toggle" class="btn btn-secondary" style="padding:8px 14px;font-size:13px;">${ICON("languages", 14)} ${state.language}</button>
-      </div>
-    </nav>`;
+      ${items.map(it => `<div class="nav-item ${state.view === it.id || (it.id === 'photo' && ['describe','results'].includes(state.view)) ? 'active' : ''}" data-nav="${it.id}">${ICON(it.icon, 17)}<span>${it.label}</span></div>`).join("")}
+      ${state.user ? `<div class="signout-block" style="margin-top:auto;padding-top:10px;">
+        <div class="nav-item" id="sidebar-logout">${ICON("logout", 17)}<span>Log out</span></div>
+      </div>` : ""}
+    </div>`;
 }
 
 function heroHTML() {
@@ -241,19 +387,19 @@ function heroHTML() {
         <div style="display:flex;gap:12px;flex-wrap:wrap;">
           <button id="go-photo" class="btn btn-primary">${ICON("camera", 16, "var(--mint-dark)")} Begin identification</button>
           <button id="go-describe" class="btn btn-secondary">${ICON("pencil", 16)} Describe it instead</button>
+          <button id="go-schedule" class="btn btn-secondary">${ICON("calendar", 16)} My schedule</button>
         </div>
       </div>
       <div>
         ${stepHTML("01", "Photograph the tablet", "Place it on a plain, dark surface in even light. Veridose reads the imprint, the shape, the colour and the score line.")}
         ${stepHTML("02", "Confirm the match", "You get one most-likely medicine and every close alternative, so you can verify the imprint yourself before taking anything.")}
-        ${stepHTML("03", "Keep a cabinet", "Save what you check. Veridose flags general interaction concerns across everything in your history.")}
+        ${stepHTML("03", "Keep a schedule", "Sign in to build a morning, afternoon, evening, night and monthly medicine schedule Veridose remembers for you.")}
       </div>
     </div>
     <div style="max-width:960px;margin:0 auto;padding:0 24px 50px;">
       ${disclaimerHTML()}
     </div>`;
 }
-
 function stepHTML(num, title, body) {
   return `
     <div style="padding:18px 0;border-top:1px solid var(--line);">
@@ -266,7 +412,6 @@ function stepHTML(num, title, body) {
       </div>
     </div>`;
 }
-
 function disclaimerHTML() {
   return `
     <div style="background:var(--amber-bg);border-radius:10px;padding:12px 16px;display:flex;gap:10px;align-items:flex-start;">
@@ -277,10 +422,9 @@ function disclaimerHTML() {
       </p>
     </div>`;
 }
-
-function backRow(label) {
+function backRow(label, target) {
   return `
-    <div id="back-to-hero" style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;cursor:pointer;margin-bottom:20px;">
+    <div class="back-row" data-back="${target || ''}" style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;cursor:pointer;margin-bottom:20px;">
       ${ICON("arrowLeft", 15, "var(--muted)")} ${label}
     </div>`;
 }
@@ -291,10 +435,8 @@ function photoViewHTML() {
       ${backRow("Back")}
       <h2 style="font-family:var(--font-display);font-size:26px;margin:0 0 8px;">Photograph the tablet</h2>
       <p style="color:var(--muted);font-size:13.5px;margin:0 0 22px;">Plain surface, even light, close enough to see the imprint clearly.</p>
-
       <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Current medications (optional)</label>
       <input id="meds-input" class="input" placeholder="e.g. metformin, aspirin" value="${escapeHTML(state.currentMeds)}" style="margin-bottom:20px;" />
-
       <div class="card" style="padding:26px;text-align:center;">
         <input id="file-input" type="file" accept="image/*" style="display:none;" />
         ${state.analyzing ? `
@@ -306,29 +448,25 @@ function photoViewHTML() {
           <button id="upload-btn" class="btn btn-primary">${ICON("camera", 16, "var(--mint-dark)")} Choose a photo</button>`}
         ${state.analyzeError ? `<p style="color:var(--red);font-size:13px;margin-top:14px;">${escapeHTML(state.analyzeError)}</p>` : ""}
       </div>
+      <p id="go-describe-link" style="text-align:center;color:var(--cyan);font-size:13px;margin-top:18px;cursor:pointer;">Prefer to describe it instead?</p>
     </div>`;
 }
-
 function describeViewHTML() {
   return `
     <div style="max-width:560px;margin:0 auto;padding:40px 24px 60px;">
       ${backRow("Back")}
       <h2 style="font-family:var(--font-display);font-size:26px;margin:0 0 8px;">Describe it instead</h2>
       <p style="color:var(--muted);font-size:13.5px;margin:0 0 22px;">Shape, colour, size, any letters or numbers stamped on it, and packaging text if you have it.</p>
-
       <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Current medications (optional)</label>
       <input id="meds-input" class="input" placeholder="e.g. metformin, aspirin" value="${escapeHTML(state.currentMeds)}" style="margin-bottom:20px;" />
-
       <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Description</label>
       <textarea id="desc-input" class="input" rows="4" placeholder="e.g. small round white tablet, imprint L484, no strip">${escapeHTML(state.descriptionText)}</textarea>
-
       <button id="submit-desc" class="btn btn-primary" style="margin-top:16px;width:100%;" ${state.analyzing ? "disabled" : ""}>
         ${state.analyzing ? `<span class="spin" style="display:inline-flex;">${ICON("loader", 16, "var(--mint-dark)")}</span> Checking…` : "Check description"}
       </button>
       ${state.analyzeError ? `<p style="color:var(--red);font-size:13px;margin-top:12px;">${escapeHTML(state.analyzeError)}</p>` : ""}
     </div>`;
 }
-
 function resultCardHTML(entry) {
   const r = entry.result;
   const matches = (r.possible_matches || []).map(m => `
@@ -340,13 +478,11 @@ function resultCardHTML(entry) {
       ${m.common_use ? `<p style="margin:5px 0 0;font-size:12.5px;color:var(--cyan);">${escapeHTML(m.common_use)}</p>` : ""}
       <p style="margin:4px 0 0;font-size:13px;color:var(--muted);">${escapeHTML(m.reason)}</p>
     </div>`).join("") || `<p style="font-size:13.5px;color:var(--muted);padding:8px 0;">No confident matches from this.</p>`;
-
   const flags = (r.interaction_flags || []).map(f => `
     <div style="display:flex;gap:8px;padding:8px 0;">
       ${ICON("alert", 15, "var(--red)")}
       <p style="margin:0;font-size:13px;color:var(--text-dim);"><strong style="color:var(--text);">${escapeHTML(f.with)}:</strong> ${escapeHTML(f.concern)}</p>
     </div>`).join("");
-
   return `
     <div class="card" style="padding:18px;margin-bottom:14px;">
       <div style="display:flex;gap:12px;">
@@ -365,6 +501,20 @@ function resultCardHTML(entry) {
       </div>
     </div>`;
 }
+function resultsViewHTML() {
+  return `
+    <div style="max-width:600px;margin:0 auto;padding:36px 24px 60px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+        <h2 style="font-family:var(--font-display);font-size:24px;margin:0;">Your checks</h2>
+        <div style="display:flex;gap:8px;">
+          <button id="new-photo" class="btn btn-secondary" style="padding:9px 14px;font-size:13px;">${ICON("camera", 14)} Photo</button>
+          <button id="new-describe" class="btn btn-secondary" style="padding:9px 14px;font-size:13px;">${ICON("pencil", 14)} Describe</button>
+        </div>
+      </div>
+      <div style="margin-bottom:18px;">${disclaimerHTML()}</div>
+      ${state.history.map(resultCardHTML).join("")}
+    </div>`;
+}
 
 function chatSectionHTML() {
   const messages = state.chatHistory.map(m => `
@@ -376,13 +526,11 @@ function chatSectionHTML() {
         border:${m.role === 'user' ? 'none' : '1px solid var(--line)'};
         white-space:pre-wrap;">${escapeHTML(m.text)}</div>
     </div>`).join("");
-
   return `
     <div style="max-width:640px;margin:0 auto;padding:36px 24px 60px;">
       ${backRow("Back")}
       <h2 style="font-family:var(--font-display);font-size:26px;margin:0 0 6px;">Safety assistant</h2>
-      <p style="color:var(--muted);font-size:13.5px;margin:0 0 20px;">General medication questions and symptom guidance \u2014 storage, disposal, fever, mild symptoms, and when to see a doctor. No dosage advice or diagnosis, ever.</p>
-
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 20px;">General medication questions and symptom guidance. No dosage advice or diagnosis, ever.</p>
       <div id="chat-section-messages" class="card" style="min-height:340px;max-height:460px;overflow-y:auto;padding:16px;margin-bottom:14px;">
         ${messages || `<p style="font-size:13.5px;color:var(--muted);text-align:center;margin-top:40px;">Ask about medications, or describe a symptom like a fever \u2014 I'll give general guidance and tell you when it's time to see a doctor.</p>`}
         ${state.chatSending ? `<div style="display:flex;justify-content:flex-start;"><div style="padding:11px 14px;border-radius:14px;background:var(--panel);border:1px solid var(--line);"><span class="spin" style="display:inline-flex;">${ICON("loader", 15, "var(--muted)")}</span></div></div>` : ""}
@@ -395,21 +543,151 @@ function chatSectionHTML() {
     </div>`;
 }
 
-function resultsViewHTML() {
-  return `
-    <div style="max-width:600px;margin:0 auto;padding:36px 24px 60px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-        <h2 style="font-family:var(--font-display);font-size:24px;margin:0;">Your checks</h2>
-        <div style="display:flex;gap:8px;">
-          <button id="new-photo" class="btn btn-secondary" style="padding:9px 14px;font-size:13px;">${ICON("camera", 14)} Photo</button>
-          <button id="new-describe" class="btn btn-secondary" style="padding:9px 14px;font-size:13px;">${ICON("pencil", 14)} Describe</button>
+// ---------- account view ----------
+function accountViewHTML() {
+  if (!firebaseReady) {
+    return `
+      <div style="max-width:480px;margin:0 auto;padding:60px 24px;">
+        <div class="card" style="padding:22px;">
+          <p style="margin:0;font-size:14px;color:var(--text-dim);line-height:1.6;">
+            Accounts aren't set up yet on this deployment. Add your Firebase project config near the top of
+            <code style="color:var(--cyan);">public/index.html</code> to enable sign in and the medicine schedule.
+          </p>
         </div>
-      </div>
-      <div style="margin-bottom:18px;">${disclaimerHTML()}</div>
-      ${state.history.map(resultCardHTML).join("")}
+      </div>`;
+  }
+  if (state.user) {
+    return `
+      <div style="max-width:480px;margin:0 auto;padding:60px 24px;">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;">
+          <div style="width:52px;height:52px;border-radius:50%;background:var(--panel-alt);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;">${ICON("user", 24, "var(--cyan)")}</div>
+          <div>
+            <p style="margin:0;font-family:var(--font-display);font-weight:700;font-size:19px;">${escapeHTML(state.user.displayName || "Your account")}</p>
+            <p style="margin:2px 0 0;font-size:13px;color:var(--muted);">${escapeHTML(state.user.email)}</p>
+          </div>
+        </div>
+        <button id="account-logout" class="btn btn-secondary" style="width:100%;">${ICON("logout", 16)} Log out</button>
+      </div>`;
+  }
+  const isSignup = state.authMode === "signup";
+  return `
+    <div style="max-width:420px;margin:0 auto;padding:60px 24px;">
+      <h2 style="font-family:var(--font-display);font-size:26px;margin:0 0 6px;">${isSignup ? "Create your account" : "Sign in"}</h2>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 22px;">Save your medicine schedule and access it anywhere.</p>
+      ${isSignup ? `<input id="auth-name" class="input" placeholder="Full name" value="${escapeHTML(state.authName)}" style="margin-bottom:12px;" />` : ""}
+      <input id="auth-email" class="input" type="email" placeholder="Email address" value="${escapeHTML(state.authEmail)}" style="margin-bottom:12px;" />
+      <input id="auth-password" class="input" type="password" placeholder="Password" value="${escapeHTML(state.authPassword)}" style="margin-bottom:16px;" />
+      ${state.authError ? `<p style="color:var(--red);font-size:13px;margin:0 0 12px;">${escapeHTML(state.authError)}</p>` : ""}
+      <button id="auth-submit" class="btn btn-primary" style="width:100%;" ${state.authBusy ? "disabled" : ""}>
+        ${state.authBusy ? `<span class="spin" style="display:inline-flex;">${ICON("loader", 16, "var(--mint-dark)")}</span>` : (isSignup ? "Create account" : "Sign in")}
+      </button>
+      <p id="auth-switch" style="text-align:center;color:var(--cyan);font-size:13px;margin-top:16px;cursor:pointer;">
+        ${isSignup ? "Already have an account? Sign in" : "New here? Create an account"}
+      </p>
     </div>`;
 }
 
+// ---------- schedule view ----------
+function medicineCardHTML(m) {
+  const timeLine = m.frequency === "monthly"
+    ? `Monthly \u2014 day ${m.dayOfMonth} of each month`
+    : (m.times || []).map(t => TIME_LABELS[t]).join(", ") || "No time set";
+  return `
+    <div class="card" style="padding:14px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+      <div>
+        <p style="margin:0;font-family:var(--font-display);font-weight:700;font-size:15.5px;">${escapeHTML(m.name)}</p>
+        <p style="margin:3px 0 0;font-size:12.5px;color:var(--cyan);">${timeLine}</p>
+        ${m.notes ? `<p style="margin:4px 0 0;font-size:12px;color:var(--muted);">${escapeHTML(m.notes)}</p>` : ""}
+      </div>
+      <span class="del-med" data-id="${m.id}" style="cursor:pointer;display:flex;color:var(--muted);flex-shrink:0;">${ICON("trash", 15, "var(--muted)")}</span>
+    </div>`;
+}
+function addMedicineFormHTML() {
+  const m = state.newMed;
+  return `
+    <div class="card" style="padding:18px;margin-bottom:20px;">
+      <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Medicine name</label>
+      <input id="med-name" class="input" placeholder="e.g. Paracetamol" value="${escapeHTML(m.name)}" style="margin-bottom:14px;" />
+
+      <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Frequency</label>
+      <select id="med-frequency" class="input" style="margin-bottom:14px;">
+        <option value="daily" ${m.frequency === "daily" ? "selected" : ""}>Daily (pick times of day)</option>
+        <option value="monthly" ${m.frequency === "monthly" ? "selected" : ""}>Monthly (pick a day of month)</option>
+      </select>
+
+      ${m.frequency === "daily" ? `
+        <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:8px;letter-spacing:0.3px;text-transform:uppercase;">Times of day</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+          ${TIME_SLOTS.map(t => `
+            <label style="display:flex;align-items:center;gap:6px;background:var(--panel-alt);border:1px solid ${m.times.includes(t) ? 'var(--cyan)' : 'var(--line)'};border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;">
+              <input type="checkbox" class="med-time-check" data-time="${t}" ${m.times.includes(t) ? "checked" : ""} style="accent-color:var(--cyan);" /> ${TIME_LABELS[t]}
+            </label>`).join("")}
+        </div>` : `
+        <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Day of month</label>
+        <input id="med-day" class="input" type="number" min="1" max="31" value="${escapeHTML(m.dayOfMonth)}" style="margin-bottom:14px;max-width:120px;" />`}
+
+      <label style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase;">Notes (optional)</label>
+      <input id="med-notes" class="input" placeholder="e.g. after food" value="${escapeHTML(m.notes)}" style="margin-bottom:16px;" />
+
+      ${state.scheduleError ? `<p style="color:var(--red);font-size:13px;margin:0 0 12px;">${escapeHTML(state.scheduleError)}</p>` : ""}
+      <div style="display:flex;gap:10px;">
+        <button id="med-cancel" class="btn btn-secondary" style="flex:1;">Cancel</button>
+        <button id="med-save" class="btn btn-primary" style="flex:2;">${ICON("calendar", 16, "var(--mint-dark)")} Add to schedule</button>
+      </div>
+    </div>`;
+}
+function scheduleViewHTML() {
+  if (!firebaseReady) return accountViewHTML();
+  if (!state.user) {
+    return `
+      <div style="max-width:480px;margin:0 auto;padding:60px 24px;text-align:center;">
+        ${ICON("calendar", 34, "var(--cyan)")}
+        <h2 style="font-family:var(--font-display);font-size:24px;margin:16px 0 8px;">Sign in for your schedule</h2>
+        <p style="color:var(--muted);font-size:13.5px;margin:0 0 20px;">Your medicine schedule is saved to your account so it's there whenever you come back.</p>
+        <button id="schedule-go-account" class="btn btn-primary">Sign in / Create account</button>
+      </div>`;
+  }
+  const grouped = {};
+  TIME_SLOTS.forEach(t => grouped[t] = []);
+  const monthly = [];
+  state.schedule.forEach(m => {
+    if (m.frequency === "monthly") monthly.push(m);
+    else (m.times || []).forEach(t => { if (grouped[t]) grouped[t].push(m); });
+  });
+
+  return `
+    <div style="max-width:600px;margin:0 auto;padding:36px 24px 90px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <h2 style="font-family:var(--font-display);font-size:26px;margin:0;">Your schedule</h2>
+        <button id="show-add-med" class="btn btn-primary" style="padding:9px 14px;font-size:13px;">${ICON("calendar", 14, "var(--mint-dark)")} Add medicine</button>
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 20px;">Signed in as ${escapeHTML(state.user.email)}</p>
+      ${state.scheduleLoading ? `<p style="color:var(--muted);font-size:13.5px;">Loading…</p>` : ""}
+      ${state.showAddMedicine ? addMedicineFormHTML() : ""}
+      ${state.scheduleError && !state.showAddMedicine ? `<p style="color:var(--red);font-size:13px;margin:0 0 12px;">${escapeHTML(state.scheduleError)}</p>` : ""}
+
+      ${TIME_SLOTS.map(t => `
+        <div style="margin-bottom:22px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            ${ICON(t === "morning" || t === "afternoon" ? "sun" : "moon", 15, "var(--cyan)")}
+            <h3 style="font-family:var(--font-display);font-size:16px;margin:0;">${TIME_LABELS[t]}</h3>
+          </div>
+          ${grouped[t].length ? grouped[t].map(medicineCardHTML).join("") : `<p style="font-size:12.5px;color:var(--muted);margin:0;">Nothing scheduled.</p>`}
+        </div>`).join("")}
+
+      <div style="margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          ${ICON("calendar", 15, "var(--cyan)")}
+          <h3 style="font-family:var(--font-display);font-size:16px;margin:0;">Monthly</h3>
+        </div>
+        ${monthly.length ? monthly.map(medicineCardHTML).join("") : `<p style="font-size:12.5px;color:var(--muted);margin:0;">Nothing scheduled.</p>`}
+      </div>
+
+      <div style="margin-top:24px;">${disclaimerHTML()}</div>
+    </div>`;
+}
+
+// ---------- main render ----------
 function render() {
   const app = document.getElementById("app");
   if (!state.loaded) { app.innerHTML = ""; return; }
@@ -419,9 +697,11 @@ function render() {
   else if (state.view === "describe") body = describeViewHTML();
   else if (state.view === "results") body = resultsViewHTML();
   else if (state.view === "chat") body = chatSectionHTML();
+  else if (state.view === "schedule") body = scheduleViewHTML();
+  else if (state.view === "account") body = accountViewHTML();
   else body = heroHTML();
 
-  app.innerHTML = headerHTML() + body;
+  app.innerHTML = sidebarHTML() + `<div class="main">${body}</div>`;
   attachHandlers();
   if (state.view === "chat") {
     const list = document.getElementById("chat-section-messages");
@@ -432,20 +712,23 @@ function render() {
 function attachHandlers() {
   const q = (id) => document.getElementById(id);
 
-  const langBtn = q("lang-toggle");
-  if (langBtn) langBtn.onclick = () => { state.language = state.language === "English" ? "Hindi" : "English"; render(); };
-
-  const logoHome = q("logo-home");
-  if (logoHome) logoHome.onclick = () => { state.view = state.history.length ? "results" : "hero"; render(); };
+  document.querySelectorAll("[data-nav]").forEach(el => {
+    el.onclick = () => { state.view = el.dataset.nav; state.analyzeError = ""; render(); };
+  });
+  const sidebarLogout = q("sidebar-logout");
+  if (sidebarLogout) sidebarLogout.onclick = () => handleLogout();
 
   const goPhoto = q("go-photo"), newPhoto = q("new-photo");
   [goPhoto, newPhoto].forEach(el => { if (el) el.onclick = () => { state.analyzeError = ""; state.view = "photo"; render(); }; });
+  const goDescribe = q("go-describe"), newDescribe = q("new-describe"), goDescribeLink = q("go-describe-link");
+  [goDescribe, newDescribe, goDescribeLink].forEach(el => { if (el) el.onclick = () => { state.analyzeError = ""; state.view = "describe"; render(); }; });
+  const goSchedule = q("go-schedule"), scheduleGoAccount = q("schedule-go-account");
+  [goSchedule].forEach(el => { if (el) el.onclick = () => { state.view = "schedule"; render(); }; });
+  if (scheduleGoAccount) scheduleGoAccount.onclick = () => { state.view = "account"; render(); };
 
-  const goDescribe = q("go-describe"), newDescribe = q("new-describe");
-  [goDescribe, newDescribe].forEach(el => { if (el) el.onclick = () => { state.analyzeError = ""; state.view = "describe"; render(); }; });
-
-  const back = q("back-to-hero");
-  if (back) back.onclick = () => { state.view = state.history.length ? "results" : "hero"; render(); };
+  document.querySelectorAll(".back-row").forEach(el => {
+    el.onclick = () => { state.view = state.history.length ? "results" : "hero"; render(); };
+  });
 
   const medsInput = q("meds-input");
   if (medsInput) medsInput.onchange = () => { state.currentMeds = medsInput.value; localStorage.setItem("veridose-current-meds", state.currentMeds); };
@@ -464,9 +747,6 @@ function attachHandlers() {
 
   document.querySelectorAll(".del-entry").forEach(el => { el.onclick = () => deleteEntry(el.dataset.id); });
 
-  const navChat = q("nav-chat");
-  if (navChat) navChat.onclick = () => { state.view = "chat"; render(); };
-
   const chatSectionSend = q("chat-section-send");
   const chatSectionInput = q("chat-section-input");
   if (chatSectionSend && chatSectionInput) {
@@ -474,9 +754,46 @@ function attachHandlers() {
     chatSectionInput.onkeydown = (e) => { if (e.key === "Enter") { sendChatMessage(chatSectionInput.value); chatSectionInput.value = ""; } };
     chatSectionInput.focus();
   }
+
+  // auth
+  const authEmail = q("auth-email"), authPassword = q("auth-password"), authName = q("auth-name");
+  if (authEmail) authEmail.oninput = () => { state.authEmail = authEmail.value; };
+  if (authPassword) authPassword.oninput = () => { state.authPassword = authPassword.value; };
+  if (authName) authName.oninput = () => { state.authName = authName.value; };
+  const authSubmit = q("auth-submit");
+  if (authSubmit) authSubmit.onclick = () => { state.authMode === "signup" ? handleSignUp() : handleLogin(); };
+  const authSwitch = q("auth-switch");
+  if (authSwitch) authSwitch.onclick = () => { state.authMode = state.authMode === "signup" ? "login" : "signup"; state.authError = ""; render(); };
+  const accountLogout = q("account-logout");
+  if (accountLogout) accountLogout.onclick = () => handleLogout();
+
+  // schedule
+  const showAddMed = q("show-add-med");
+  if (showAddMed) showAddMed.onclick = () => { state.showAddMedicine = true; state.scheduleError = ""; render(); };
+  const medCancel = q("med-cancel");
+  if (medCancel) medCancel.onclick = () => { state.showAddMedicine = false; state.scheduleError = ""; render(); };
+  const medSave = q("med-save");
+  if (medSave) medSave.onclick = () => addMedicine();
+  const medName = q("med-name");
+  if (medName) medName.oninput = () => { state.newMed.name = medName.value; };
+  const medNotes = q("med-notes");
+  if (medNotes) medNotes.oninput = () => { state.newMed.notes = medNotes.value; };
+  const medDay = q("med-day");
+  if (medDay) medDay.oninput = () => { state.newMed.dayOfMonth = medDay.value; };
+  const medFrequency = q("med-frequency");
+  if (medFrequency) medFrequency.onchange = () => { state.newMed.frequency = medFrequency.value; render(); };
+  document.querySelectorAll(".med-time-check").forEach(el => {
+    el.onchange = () => {
+      const t = el.dataset.time;
+      if (el.checked) { if (!state.newMed.times.includes(t)) state.newMed.times.push(t); }
+      else { state.newMed.times = state.newMed.times.filter(x => x !== t); }
+    };
+  });
+  document.querySelectorAll(".del-med").forEach(el => { el.onclick = () => deleteMedicine(el.dataset.id); });
 }
 
-loadHistory();
+loadLocal();
+initAuthListener();
 render();
 </script>
 </body>
